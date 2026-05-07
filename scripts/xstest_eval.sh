@@ -1,0 +1,18 @@
+python eval_xstest_to_completions.py \
+	--model_name_or_path model/Llama-3.2-3B-Instruct \
+	--ckpt_dir SaLR/SaLR_llama3b/SaLR_llama3b/Llama-3.2-3B-Instruct/ep_10/lr_0.0004 \
+	--input_path HarmBench/test_cases/xstest.json \
+	--output_path HarmBench/completions/llama3.2_3b_xstest_SaLR.json \
+	--batch_size 128 \
+	--model_max_length 512 \
+	--bf16 \
+	--lora_r 128 --lora_alpha 32 --lora_init \
+	--num_latent 6 \
+	--use_prj True \
+	--prj_dim 2048 \
+	--prj_no_ln False \
+	--prj_dropout 0.0 \
+	--inf_latent_iterations 6 \
+	--inf_num_iterations 1 \
+	--remove_eos True \
+	--use_lora True \
