@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 import re
@@ -8,11 +9,11 @@ from tqdm import tqdm
 from openai import OpenAI
 
 
-INPUT_PATH = "Data/SafeChain/SafeChain_SaLR.json"
-OUTPUT_PATH = "Data/SafeChain/SafeChain_SaLR_compressed.json"
+INPUT_PATH = "data/safechain_raw.json"
+OUTPUT_PATH = "data/safechain_compressed.json"
 
 MODEL_NAME = "Qwen3-32B"
-OPENAI_API_KEY = "EMPTY"
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "EMPTY")
 OPENAI_API_BASE = "http://localhost:8001/v1"
 
 MAX_TOKENS = 256
@@ -52,7 +53,7 @@ Output exactly one line in this format:
 Rules:
 - Exactly 4 blocks.
 - No extra text.
-- Keep each block short.
+- Keep each free text block within 5 words.
 - Abstract the request and risk.
 - Do not restate dangerous details verbatim.
 - The third block must be exactly one of:
@@ -102,8 +103,32 @@ Answer:
 """
 
 
-
 ACTION_SET = {"refuse", "partial", "allow"}
+LABEL_SET = {
+    "vanilla_benign",
+    "vanilla_harmful",
+    "adversarial_benign",
+    "adversarial_harmful",
+}
+
+
+def normalized_input(record):
+    if not isinstance(record, dict):
+        raise ValueError("Each input record must be an object")
+    fields = {
+        key: str(record.get(key, "")).strip()
+        for key in ("question", "label", "reasoning", "answer")
+    }
+    if not all(fields.values()) or fields["label"] not in LABEL_SET:
+        raise ValueError(
+            "Expected nonempty question, label, reasoning and answer with a supported SafeChain label"
+        )
+    return fields
+
+
+def failed_record(record):
+    return bool(record.get("error")) or not str(record.get("cot", "")).strip()
+
 
 def extract_cot(text: str) -> str:
     if not text:
@@ -135,12 +160,19 @@ def is_valid_cot(cot: str) -> bool:
     blocks = re.findall(r"<<(.*?)>>", cot)
     if len(blocks) != 4:
         return False
+    if any(not block.strip() for block in blocks):
+        return False
 
     action = blocks[2].strip().lower()
     if action not in ACTION_SET:
         return False
 
     return True
+
+
+def meets_word_limit(cot: str) -> bool:
+    blocks = re.findall(r"<<(.*?)>>", cot)
+    return len(blocks) == 4 and all(0 < len(blocks[i].split()) <= 5 for i in (0, 1, 3))
 
 
 def load_json(path: str) -> Any:
@@ -155,7 +187,6 @@ def save_json(data: Any, path: str) -> None:
     os.replace(tmp_path, path)
 
 
-
 def make_client() -> OpenAI:
     return OpenAI(
         api_key=OPENAI_API_KEY,
@@ -163,7 +194,9 @@ def make_client() -> OpenAI:
     )
 
 
-def generate_cot(client: OpenAI, question: str, label: str, reasoning: str, answer: str) -> str:
+def generate_cot(
+    client: OpenAI, question: str, label: str, reasoning: str, answer: str
+) -> str:
     prompt = build_prompt(question, label, reasoning, answer)
 
     resp = client.chat.completions.create(
@@ -186,13 +219,34 @@ def generate_cot(client: OpenAI, question: str, label: str, reasoning: str, answ
     return cot
 
 
-
 def main():
-    client = make_client()
+    global INPUT_PATH, OUTPUT_PATH, MODEL_NAME, OPENAI_API_BASE, SAVE_EVERY
+    parser = argparse.ArgumentParser(
+        description="Compress SafeChain with an OpenAI-compatible Qwen3-32B endpoint."
+    )
+    parser.add_argument("--input", default=INPUT_PATH)
+    parser.add_argument("--output", default=OUTPUT_PATH)
+    parser.add_argument("--model", default=MODEL_NAME)
+    parser.add_argument("--base-url", default=OPENAI_API_BASE)
+    parser.add_argument("--save-every", type=int, default=SAVE_EVERY)
+    parser.add_argument(
+        "--retry-failed",
+        action="store_true",
+        help="Retry saved API errors or empty chains without reprocessing successful records.",
+    )
+    args = parser.parse_args()
+    if args.save_every < 1:
+        parser.error("save-every must be positive")
+    if os.path.abspath(args.input) == os.path.abspath(args.output):
+        parser.error("input and output must be different files")
+    INPUT_PATH, OUTPUT_PATH, MODEL_NAME = args.input, args.output, args.model
+    OPENAI_API_BASE, SAVE_EVERY = args.base_url, args.save_every
+    os.makedirs(os.path.dirname(os.path.abspath(OUTPUT_PATH)), exist_ok=True)
 
     raw_data: List[Dict[str, Any]] = load_json(INPUT_PATH)
     if not isinstance(raw_data, list):
         raise ValueError(f"{type(raw_data)}")
+    raw_data = [normalized_input(record) for record in raw_data]
 
     if os.path.exists(OUTPUT_PATH):
         processed_data = load_json(OUTPUT_PATH)
@@ -201,14 +255,24 @@ def main():
     else:
         processed_data = []
 
+    if len(processed_data) > len(raw_data):
+        raise ValueError("Existing output has more records than the selected input")
+    for index, record in enumerate(processed_data):
+        if normalized_input(record) != raw_data[index]:
+            raise ValueError(f"Existing output does not match input at row {index}")
     processed_count = len(processed_data)
-
-
-    pbar = tqdm(total=len(raw_data), initial=processed_count, desc="Compressing")
+    indices = [
+        index
+        for index, record in enumerate(processed_data)
+        if args.retry_failed and failed_record(record)
+    ]
+    indices.extend(range(processed_count, len(raw_data)))
+    pbar = tqdm(total=len(indices), desc="Compressing")
+    client = make_client() if indices else None
 
     newly_processed = 0
 
-    for idx in range(processed_count, len(raw_data)):
+    for idx in indices:
         item = raw_data[idx]
 
         question = str(item.get("question", "")).strip()
@@ -228,14 +292,19 @@ def main():
             cot = generate_cot(client, question, label, reasoning, answer)
             out_item["cot"] = cot
             out_item["cot_valid"] = is_valid_cot(cot)
+            out_item["cot_word_limit_valid"] = meets_word_limit(cot)
         except Exception as e:
             out_item["cot"] = ""
             out_item["cot_valid"] = False
+            out_item["cot_word_limit_valid"] = False
             out_item["error"] = str(e)
             print(f"\n[Error] idx={idx}: {e}")
             time.sleep(SLEEP_ON_ERROR)
 
-        processed_data.append(out_item)
+        if idx < len(processed_data):
+            processed_data[idx] = out_item
+        else:
+            processed_data.append(out_item)
         newly_processed += 1
 
         if newly_processed % SAVE_EVERY == 0:
@@ -245,11 +314,9 @@ def main():
         if len(short_cot) > 120:
             short_cot = short_cot[:120] + "..."
 
-        pbar.set_postfix({
-            "idx": idx,
-            "valid": out_item.get("cot_valid", False),
-            "cot": short_cot
-        })
+        pbar.set_postfix(
+            {"idx": idx, "valid": out_item.get("cot_valid", False), "cot": short_cot}
+        )
         pbar.update(1)
 
     save_json(processed_data, OUTPUT_PATH)
@@ -259,7 +326,7 @@ def main():
     valid_count = sum(1 for x in processed_data if x.get("cot_valid", False))
     invalid_count = total_count - valid_count
     error_count = sum(1 for x in processed_data if "error" in x)
-    dropped_count = 0 
+    dropped_count = 0
     print("\ndone")
     print(f"output_path: {OUTPUT_PATH}")
     print(f"total_count: {total_count}")
@@ -267,6 +334,7 @@ def main():
     print(f"invalid_count: {invalid_count}")
     print(f"error_count: {error_count}")
     print(f"dropped_count: {dropped_count}")
+
 
 if __name__ == "__main__":
     main()

@@ -1,38 +1,43 @@
+#    Copyright 2023 Rohan Taori, Ishaan Gulrajani, Tianyi Zhang, Yann Dubois, Xuechen Li
+#
+#    Licensed under the Apache License, Version 2.0 (the "License");
+#    you may not use this file except in compliance with the License.
+#    You may obtain a copy of the License at
+#
+#        http://www.apache.org/licenses/LICENSE-2.0
+#
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS,
+#    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#    See the License for the specific language governing permissions and
+#    limitations under the License.
+
 # Modified from https://github.com/tatsu-lab/stanford_alpaca/blob/main/train.py
-import copy
 import logging
 import os
 import re
-import random
-from dataclasses import dataclass, field
-from typing import Dict, Optional, Sequence
+from dataclasses import dataclass
+from typing import Dict, Sequence
 import torch
-import json
 import transformers
 from torch.utils.data import Dataset
 from transformers import Trainer
-from safetensors.torch import load_file
-from tqdm import tqdm
 from math import ceil
-from peft import PeftModel, LoraConfig, TaskType, get_peft_model
+from peft import LoraConfig, TaskType
 from datasets import load_dataset
-from functools import partial
 
-from src.model import (
-    SALR,
-    ModelArguments,
-    DataArguments,
-    TrainingArguments,
-    freeze_model
-)
+from src.model import SALR, ModelArguments, DataArguments, TrainingArguments
 
 IGNORE_INDEX = -100
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(device)
 
+
 class CustomTrainer(Trainer):
-    def compute_loss(self, model, inputs, num_items_in_batch):
+    def compute_loss(
+        self, model, inputs, return_outputs=False, num_items_in_batch=None
+    ):
         # Extract the global step from the optimizer
         step = self.state.global_step
 
@@ -42,7 +47,9 @@ class CustomTrainer(Trainer):
         num_epochs = self.args.num_train_epochs
         dataset_size = len(self.train_dataset)
 
-        effective_batch_size = batch_size * self.args.world_size * gradient_accumulation_steps
+        effective_batch_size = (
+            batch_size * self.args.world_size * gradient_accumulation_steps
+        )
         total_steps = ceil(dataset_size / effective_batch_size) * num_epochs
 
         # Add the step information to the inputs dictionary
@@ -51,32 +58,43 @@ class CustomTrainer(Trainer):
         # Call the model's forward method
         outputs = model(**inputs)
         loss = outputs["loss"]
-        #"ce_loss": ce_loss_total, "mse_loss": mse_loss_total, "ref_ce_loss": ref_ce_loss
+        # "ce_loss": ce_loss_total, "mse_loss": mse_loss_total, "ref_ce_loss": ref_ce_loss
         if step % self.args.logging_steps == 0:
-            self.log({"loss": loss.item(), "ce_loss": outputs["ce_loss"], "distill_loss": outputs["distill_loss"], "ref_ce_loss": outputs["ref_ce_loss"],})
-        return loss
+            self.log(
+                {
+                    "loss": loss.item(),
+                    "ce_loss": outputs["ce_loss"],
+                    "distill_loss": outputs["distill_loss"],
+                    "ref_ce_loss": outputs["ref_ce_loss"],
+                }
+            )
+        return (loss, outputs) if return_outputs else loss
 
     def log(self, logs, start_time=None):
         if self.state.global_step is not None:
             for k, v in logs.items():
                 super().log({k: v})
 
-def _tokenize_fn(strings: Sequence[str], tokenizer: transformers.PreTrainedTokenizer) -> Dict:
+
+def _tokenize_fn(
+    strings: Sequence[str], tokenizer: transformers.PreTrainedTokenizer
+) -> Dict:
     """Tokenize a list of strings."""
     tokenized_list = [
         tokenizer(
             text,
             return_tensors="pt",
             padding="longest",
-            max_length=8192,#training_args.model_max_length,
+            max_length=8192,  # training_args.model_max_length,
             truncation=True,
-            return_attention_mask=False
+            return_attention_mask=False,
         )
         for text in strings
     ]
     input_ids = labels = [tokenized.input_ids[0] for tokenized in tokenized_list]
     input_ids_lens = labels_lens = [
-        tokenized.input_ids.ne(tokenizer.pad_token_id).sum().item() for tokenized in tokenized_list
+        tokenized.input_ids.ne(tokenizer.pad_token_id).sum().item()
+        for tokenized in tokenized_list
     ]
     return dict(
         input_ids=input_ids,
@@ -85,15 +103,16 @@ def _tokenize_fn(strings: Sequence[str], tokenizer: transformers.PreTrainedToken
         labels_lens=labels_lens,
     )
 
+
 def extract_answer_number(sentence: str) -> float:
-    sentence = sentence.replace(',', '')
-    pred = [s for s in re.findall(r'-?\d+\.?\d*', sentence)]
+    sentence = sentence.replace(",", "")
+    pred = [s for s in re.findall(r"-?\d+\.?\d*", sentence)]
     if not pred:
-        return float('inf')
+        return float("inf")
     segment = [sentence]
     if len(segment) > 1:
         pred_answer = segment[1]
-        pred_answer = [s for s in re.findall(r'-?\d+\.?\d*', pred_answer)]
+        pred_answer = [s for s in re.findall(r"-?\d+\.?\d*", pred_answer)]
         if len(pred_answer) > 0:
             pred_answer = pred_answer[0]
         else:
@@ -106,27 +125,46 @@ def extract_answer_number(sentence: str) -> float:
         try:
             pred_answer = float(pred_answer)
         except ValueError as e:
-            pred_answer = float('inf')
+            pred_answer = float("inf")
     return pred_answer
 
+
 def train():
-    parser = transformers.HfArgumentParser((ModelArguments, DataArguments, TrainingArguments))
+    parser = transformers.HfArgumentParser(
+        (ModelArguments, DataArguments, TrainingArguments)
+    )
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
     ##########################
     #       Peft Model       #
     ##########################
+    lora_config = None
+    if training_args.use_lora and not model_args.lora_init:
+        raise ValueError("SaLR training requires --lora_init when --use_lora True.")
     if model_args.lora_init:
         task_type = TaskType.CAUSAL_LM
-        if any(name in model_args.model_name_or_path.lower() for name in ["llama", "mistral", "falcon", "qwen"]):
-            target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "up_proj", "down_proj", "gate_proj"]
+        if any(
+            name in model_args.model_name_or_path.lower()
+            for name in ["llama", "mistral", "falcon", "qwen"]
+        ):
+            target_modules = [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "up_proj",
+                "down_proj",
+                "gate_proj",
+            ]
         elif any(name in model_args.model_name_or_path.lower() for name in ["phi"]):
             target_modules = ["q_proj", "k_proj", "v_proj", "dense", "fc1", "fc2"]
         elif any(name in model_args.model_name_or_path.lower() for name in ["gpt2"]):
-            target_modules = ["c_attn", "c_proj", 'c_fc']
+            target_modules = ["c_attn", "c_proj", "c_fc"]
         else:
-            raise ValueError(f"Only support LLAMA, Mistral, Falcon, Phi-2, but got {model_args.model_name_or_path}.")
-        
+            raise ValueError(
+                f"Only support LLAMA, Mistral, Falcon, Phi-2, but got {model_args.model_name_or_path}."
+            )
+
         lora_config = LoraConfig(
             task_type=task_type,
             inference_mode=False,
@@ -137,31 +175,37 @@ def train():
             init_lora_weights=True,
         )
 
-
     model = SALR(model_args, training_args, lora_config)
     tokenizer = transformers.AutoTokenizer.from_pretrained(
-            model_args.model_name_or_path,
-            token=model_args.token,
-            cache_dir=training_args.cache_dir,
-            model_max_length=training_args.model_max_length,
-            padding_side="right",
-            use_fast=False,
-        )
+        model_args.model_name_or_path,
+        token=model_args.token,
+        cache_dir=training_args.cache_dir,
+        model_max_length=training_args.model_max_length,
+        padding_side="right",
+        use_fast=False,
+    )
 
     if tokenizer.pad_token_id is None:
-        tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+        tokenizer.add_special_tokens({"pad_token": "[PAD]"})
         tokenizer.pad_token_id = model.pad_token_id
-        if tokenizer.pad_token_id is None: # error handling
-            tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids('[PAD]')
+        if tokenizer.pad_token_id is None:  # error handling
+            tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids("[PAD]")
 
     def get_answer_token_position(tokens, answer_prompts, tokenizer):
-        #answer_prompt = torch.tensor([464, 3280, 318, 25])
+        # answer_prompt = torch.tensor([464, 3280, 318, 25])
         try:
-            match_indices = (tokens.unfold(0, len(answer_prompts[0]), 1) == answer_prompts[0]).all(dim=1).nonzero(as_tuple=True)[0].item()
+            match_indices = (
+                (tokens.unfold(0, len(answer_prompts[0]), 1) == answer_prompts[0])
+                .all(dim=1)
+                .nonzero(as_tuple=True)[0]
+                .item()
+            )
             answer_token_id = match_indices + len(answer_prompts[0])
             return answer_token_id
-        except Exception:
-            breakpoint()
+        except (RuntimeError, ValueError) as exc:
+            raise ValueError(
+                "Cannot locate a unique 'The answer is:' marker in this GSM8K record."
+            ) from exc
 
     def preprocess(
         sources: Sequence[str],
@@ -179,35 +223,64 @@ def train():
 
         # add eos token
         if not training_args.remove_eos:
-            sources_id = [torch.tensor(x.numpy().tolist() + [tokenizer.eos_token_id], dtype=torch.long) for x in sources_id]
-            cot_id = [torch.tensor(x.numpy().tolist() + [tokenizer.eos_token_id], dtype=torch.long) for x in cot_id]
-        answers_id = [torch.tensor(x.numpy().tolist() + [tokenizer.eos_token_id], dtype=torch.long) for x in answers_id]
+            sources_id = [
+                torch.tensor(
+                    x.numpy().tolist() + [tokenizer.eos_token_id], dtype=torch.long
+                )
+                for x in sources_id
+            ]
+            cot_id = [
+                torch.tensor(
+                    x.numpy().tolist() + [tokenizer.eos_token_id], dtype=torch.long
+                )
+                for x in cot_id
+            ]
+        answers_id = [
+            torch.tensor(
+                x.numpy().tolist() + [tokenizer.eos_token_id], dtype=torch.long
+            )
+            for x in answers_id
+        ]
 
         if cot_id[0][0] == tokenizer.bos_token_id:
             cot_id = [x[1:] for x in cot_id]
             answers_id = [x[1:] for x in answers_id]
 
-        ref_input_ids = [torch.cat([x, y, z]).to(torch.long) for x, y, z in zip(sources_id, cot_id, answers_id)]
+        ref_input_ids = [
+            torch.cat([x, y, z]).to(torch.long)
+            for x, y, z in zip(sources_id, cot_id, answers_id)
+        ]
 
         ref_labels = []
         for x, y in zip(ref_input_ids, sources_id):
             z = x.clone()
-            z[:len(y)] = -100
+            z[: len(y)] = -100
             ref_labels.append(z)
 
         # source side add bot token
-        sources_id = [torch.tensor(x.numpy().tolist() + [bot_id], dtype=torch.long) for x in sources_id]
+        sources_id = [
+            torch.tensor(x.numpy().tolist() + [bot_id], dtype=torch.long)
+            for x in sources_id
+        ]
 
         # decoder side prepend eot
         if training_args.remove_eos:
-            answers_id = [torch.tensor([eot_id] + x.numpy().tolist(), dtype=torch.long) for x in answers_id]
+            answers_id = [
+                torch.tensor([eot_id] + x.numpy().tolist(), dtype=torch.long)
+                for x in answers_id
+            ]
         else:
-            answers_id = [torch.tensor([eot_id, tokenizer.eos_token_id] + x.numpy().tolist(), dtype=torch.long) for x in answers_id]
-
+            answers_id = [
+                torch.tensor(
+                    [eot_id, tokenizer.eos_token_id] + x.numpy().tolist(),
+                    dtype=torch.long,
+                )
+                for x in answers_id
+            ]
 
         answer_prompts = [
             torch.tensor(tokenizer.encode("The answer is:")),
-            torch.tensor(tokenizer.encode("The next step result is:"))
+            torch.tensor(tokenizer.encode("The next step result is:")),
         ]
         if answer_prompts[0][0] == tokenizer.bos_token_id:
             answer_prompts[0] = answer_prompts[0][1:]
@@ -220,10 +293,14 @@ def train():
             source_types, sources_id, cot_id, answers_id, ref_input_ids, answers_id
         ):
             if src_type == "gsm8k":
-                ref_pos = get_answer_token_position(ref_ids_i, answer_prompts, tokenizer)
-                model_pos = get_answer_token_position(dec_ids_i, answer_prompts, tokenizer)
+                ref_pos = get_answer_token_position(
+                    ref_ids_i, answer_prompts, tokenizer
+                )
+                model_pos = get_answer_token_position(
+                    dec_ids_i, answer_prompts, tokenizer
+                )
             elif src_type == "safechain":
-                ref_pos = len(src_ids) - 1 + len(cot_ids_i) 
+                ref_pos = len(src_ids) - 1 + len(cot_ids_i)
                 model_pos = 1 if training_args.remove_eos else 2
             else:
                 raise ValueError(f"Unknown source type: {src_type}")
@@ -249,14 +326,13 @@ def train():
             ref_labels=ref_labels,
             source_types=source_types,
         )
+
     class SupervisedDataset(Dataset):
         def __init__(self, data_name, raw_data, tokenizer, bot, eot):
             super(SupervisedDataset, self).__init__()
             logging.warning("Formatting inputs...")
 
             self.data_name = data_name
-
-
 
             questions, cots, answers, source_types = [], [], [], []
 
@@ -276,11 +352,9 @@ def train():
                 # GSM8K
                 # =========
                 if source == "gsm8k":
-
                     token_num = len(tokenizer.encode(question + cot + answer))
                     if token_num > training_args.max_token_num:
                         continue
-
 
                     final_answer = answer.split(" ")[-1].strip()
 
@@ -298,7 +372,7 @@ def train():
                     source_types.append("gsm8k")
 
                 # ===============
-                # SafeChain 
+                # SafeChain
                 # ===============
                 elif source == "safechain":
                     # 避免 OOM
@@ -315,11 +389,15 @@ def train():
                     raise ValueError(f"Unknown source type: {source}")
 
             if training_args.exp_mode:
-                questions = questions[:training_args.exp_data_num]
-                cots = cots[:training_args.exp_data_num]
-                answers = answers[:training_args.exp_data_num]
-                source_types = source_types[:training_args.exp_data_num]
+                questions = questions[: training_args.exp_data_num]
+                cots = cots[: training_args.exp_data_num]
+                answers = answers[: training_args.exp_data_num]
+                source_types = source_types[: training_args.exp_data_num]
 
+            if not questions:
+                raise ValueError(
+                    "No usable training records. Check source, question, cot, answer and max_token_num."
+                )
             print(f"{len(cots)} data in total...")
             logging.warning("Tokenizing inputs... This may take some time...")
 
@@ -340,10 +418,10 @@ def train():
         def __getitem__(self, i) -> Dict:
             return {key: self.data_dict[key][i] for key in self.keys}
 
-
     @dataclass
     class DataCollatorForSupervisedDataset(object):
         """Collate examples for supervised fine-tuning."""
+
         tokenizer: transformers.PreTrainedTokenizer
 
         def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
@@ -375,30 +453,26 @@ def train():
             encoder_input_ids = torch.nn.utils.rnn.pad_sequence(
                 reversed_input_ids,
                 batch_first=True,
-                padding_value=self.tokenizer.pad_token_id
+                padding_value=self.tokenizer.pad_token_id,
             ).flip(1)
 
             # pad
             ref_input_ids = torch.nn.utils.rnn.pad_sequence(
                 ref_input_ids,
                 batch_first=True,
-                padding_value=self.tokenizer.pad_token_id
+                padding_value=self.tokenizer.pad_token_id,
             )
             ref_labels = torch.nn.utils.rnn.pad_sequence(
-                ref_labels,
-                batch_first=True,
-                padding_value=IGNORE_INDEX
+                ref_labels, batch_first=True, padding_value=IGNORE_INDEX
             )
 
             decoder_input_ids = torch.nn.utils.rnn.pad_sequence(
                 decoder_input_ids,
                 batch_first=True,
-                padding_value=self.tokenizer.pad_token_id
+                padding_value=self.tokenizer.pad_token_id,
             )
             labels = torch.nn.utils.rnn.pad_sequence(
-                labels,
-                batch_first=True,
-                padding_value=IGNORE_INDEX
+                labels, batch_first=True, padding_value=IGNORE_INDEX
             )
 
             return dict(
@@ -406,9 +480,13 @@ def train():
                 decoder_input_ids=decoder_input_ids,
                 ref_input_ids=ref_input_ids,
                 labels=labels,
-                encoder_attention_mask=encoder_input_ids.ne(self.tokenizer.pad_token_id),
+                encoder_attention_mask=encoder_input_ids.ne(
+                    self.tokenizer.pad_token_id
+                ),
                 ref_answer_position=torch.tensor(ref_answer_position, dtype=torch.long),
-                model_answer_position=torch.tensor(model_answer_position, dtype=torch.long),
+                model_answer_position=torch.tensor(
+                    model_answer_position, dtype=torch.long
+                ),
                 ref_attention_mask=ref_input_ids.ne(self.tokenizer.pad_token_id),
                 ref_labels=ref_labels,
                 source_types=list(source_types),  # 关键
@@ -416,47 +494,36 @@ def train():
 
     def make_supervised_data_module(tokenizer, data_args) -> Dict:
         """Make dataset and collator for supervised fine-tuning."""
-        logging.warning("Downloading Data")
-        if "icot" in data_args.data_name:
-            if 'full' in data_args.data_name:
-                dataset = load_dataset("zen-E/GSM8k-Aug-NL")["train"]
-            else:
-                dataset = load_dataset("zen-E/GSM8k-Aug")["train"]
-            train_dataset = SupervisedDataset(data_name=data_args.data_name, raw_data=dataset, tokenizer=tokenizer, bot=model.bot_id, eot=model.eot_id)
-            data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
-            return dict(train_dataset=train_dataset, eval_dataset=None, data_collator=data_collator)
-        elif "SaLR" in data_args.data_name:
-            dataset = load_dataset(
-                "json",
-                data_files="Data/SaLR.json"
-            )["train"]
-            train_dataset = SupervisedDataset(data_name=data_args.data_name, raw_data=dataset, tokenizer=tokenizer, bot=model.bot_id, eot=model.eot_id)
-            data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
-            return dict(train_dataset=train_dataset, eval_dataset=None, data_collator=data_collator)
-
-        elif "strategy" in data_args.data_name:
-            dataset = load_dataset("zen-E/StrategyQA_CoT_GPT4o")["train"]
-            train_dataset = SupervisedDataset(data_name=data_args.data_name, raw_data=dataset, tokenizer=tokenizer, bot=model.bot_id, eot=model.eot_id)
-            data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
-            return dict(train_dataset=train_dataset, eval_dataset=None, data_collator=data_collator)
-        elif "commonsense" in data_args.data_name:
-            dataset = load_dataset("zen-E/CommonsenseQA-GPT4omini")["train"]
-            train_dataset = SupervisedDataset(data_name=data_args.data_name, raw_data=dataset, tokenizer=tokenizer, bot=model.bot_id, eot=model.eot_id)
-            data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
-            return dict(train_dataset=train_dataset, eval_dataset=None, data_collator=data_collator)
-        else:
-            raise NotImplementedError(f"Dataset {data_args.data_name} is not supported.")
+        if not os.path.isfile(data_args.data_path):
+            raise FileNotFoundError(
+                f"Training data not found: {data_args.data_path}. "
+                "See README.md for the data format and preparation steps; pass --data_path to select your file."
+            )
+        dataset = load_dataset("json", data_files=data_args.data_path)["train"]
+        train_dataset = SupervisedDataset(
+            data_name="SaLR",
+            raw_data=dataset,
+            tokenizer=tokenizer,
+            bot=model.bot_id,
+            eot=model.eot_id,
+        )
+        data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
+        return dict(
+            train_dataset=train_dataset, eval_dataset=None, data_collator=data_collator
+        )
 
     training_args.output_dir = os.path.join(
         training_args.output_dir,
         training_args.expt_name,
-        model_args.model_name_or_path.split('/')[-1],
+        model_args.model_name_or_path.split("/")[-1],
         f"ep_{int(training_args.num_train_epochs)}",
         f"lr_{training_args.learning_rate}",
     )
 
     data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args)
-    trainer = CustomTrainer(model=model, tokenizer=tokenizer, args=training_args, **data_module)
+    trainer = CustomTrainer(
+        model=model, tokenizer=tokenizer, args=training_args, **data_module
+    )
     trainer.train()
 
     trainer.save_state()

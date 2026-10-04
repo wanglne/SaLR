@@ -1,18 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+MODEL_PATH="${MODEL_PATH:-meta-llama/Llama-3.2-3B-Instruct}"
+: "${CKPT_DIR:?Set CKPT_DIR to the trained SaLR checkpoint directory}"
+
 python eval_safety.py \
-    --model_name_or_path model/Llama-3.2-3B-Instruct \
-    --ckpt_dir SaLR/SaLR_llama3b/SaLR_llama3b/Llama-3.2-3B-Instruct/ep_10/lr_0.0004 \
-    --input_path HarmBench/test_cases/PAIR/PAIR_llama3.2_3b_advbench.json \
-    --output_path HarmBench/completions/llama3.2_3b_advbench_PAIR_SaLR.json \
-    --batch_size 128 \
-	--model_max_length 512 \
-	--bf16 \
-	--lora_r 128 --lora_alpha 32 --lora_init \
-	--num_latent 6 \
-	--use_prj True \
-	--prj_dim 2048 \
-	--prj_no_ln False \
-	--prj_dropout 0.0 \
-	--inf_latent_iterations 6 \
-	--inf_num_iterations 1 \
-	--remove_eos True \
-	--use_lora True \
+    --model_name_or_path "$MODEL_PATH" \
+    --ckpt_dir "$CKPT_DIR" \
+    --output_dir "outputs/safety" \
+    --input_path "${INPUT_PATH:?Set INPUT_PATH to your benchmark prompt JSON}" \
+    --output_path "${OUTPUT_PATH:-outputs/safety/completions.json}" \
+    --model_max_length 512 \
+    --bf16 \
+    --lora_r 128 --lora_alpha 32 --lora_init \
+    --batch_size "${BATCH_SIZE:-1}" \
+    --num_latent 6 \
+    --use_prj True --prj_dim 2048 --prj_no_ln False --prj_dropout 0.0 \
+    --inf_latent_iterations 6 --inf_num_iterations 1 \
+    --remove_eos True --use_lora True \
+    --greedy False \
+    "$@"

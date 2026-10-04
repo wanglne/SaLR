@@ -1,3 +1,28 @@
-# IDE / OS
+# Python and development
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.env.*
+!.env.example
 .vscode/
+.idea/
 .DS_Store
+.ruff_cache/
+
+# Local research assets and generated results
+data/
+Data/
+model/
+models/
+outputs/
+logs/
+cache/
+SaLR_llama*/
+*.bin
+*.pt
+*.pth
+*.safetensors
+*.parquet
+*.log
