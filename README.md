@@ -48,7 +48,7 @@ python -m pip install -r requirements.txt
 
 ## Training data
 
-The main experimental setting combines **385,620 mathematical examples from GSM8K-Aug** with **40,000 processed examples from SafeChain**.
+The training data combines **385,620 mathematical examples from GSM8K-Aug** with **40,000 processed examples from SafeChain**.
 
 ### 1. Export source data
 
@@ -172,11 +172,11 @@ python scripts/prepare_data.py xstest \
 bash scripts/xstest_eval.sh
 ```
 
-In our experiments, we use **GPT-5.1** to evaluate refusals on XSTest and report refusal rates separately for safe and unsafe prompts.
+We use **GPT-5.1** to evaluate refusals on XSTest and report refusal rates separately for safe and unsafe prompts.
 
 ### OverThink and H-CoT
 
-This repository includes SaLR evaluation scripts for OverThink attacks on FreshQA and MuSR, and H-CoT attacks on Malicious-Educator. Download the corresponding datasets from the [OverThink](https://github.com/akumar2709/OVERTHINK_public) and [H-CoT](https://github.com/dukeceicenter/jailbreak-reasoning-openai-o1o3-deepseek-r1) repositories. Full upstream repositories and baseline evaluation scripts are not included.
+This repository includes SaLR evaluation scripts for OverThink attacks on FreshQA and MuSR, and H-CoT attacks on Malicious-Educator. Download the corresponding datasets from the [OverThink](https://github.com/akumar2709/OVERTHINK_public) and [H-CoT](https://github.com/dukeceicenter/jailbreak-reasoning-openai-o1o3-deepseek-r1) repositories.
 
 Set `CKPT_DIR` to your trained SaLR checkpoint before running the commands below.
 
@@ -208,7 +208,7 @@ SaLR/
 ├── safe-chain-generate/generate.py  # Qwen3-32B safe-chain construction
 ├── evaluation/                     # Shared inference and benchmark scorers
 ├── scripts/                        # Training, data preparation, evaluation
-├── figs/                           # Paper figures in PNG and PDF
+├── figs/                           # Paper figures in PNG format
 └── LICENSE                         # SaLR MIT license and upstream notices
 ```
 

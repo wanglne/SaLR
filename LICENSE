@@ -264,7 +264,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-XSTest refusal heuristic adapted in evaluation/score_xstest.py
+XSTest GPT classification prompt adapted in evaluation/score_xstest.py
 Source: https://github.com/paul-rottger/exaggerated-safety
 ========================================================================
 
