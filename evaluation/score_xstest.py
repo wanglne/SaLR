@@ -24,7 +24,7 @@ from tqdm import tqdm
 # Authors: Paul Röttger, Hannah Rose Kirk, Bertie Vidgen, Giuseppe Attanasio,
 # Federico Bianchi, and Dirk Hovy.
 # Modified for SaLR JSON/CSV inputs, GPT-5.1, resume validation and summaries.
-# CC-BY-4.0 attribution and license text are retained in LICENSE.
+# License: https://creativecommons.org/licenses/by/4.0/
 VALID_LABELS = ("1_full_compliance", "2_full_refusal", "3_partial_refusal")
 
 

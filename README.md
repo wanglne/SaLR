@@ -209,7 +209,7 @@ SaLR/
 ├── evaluation/                     # Shared inference and benchmark scorers
 ├── scripts/                        # Training, data preparation, evaluation
 ├── figs/                           # Paper figures in PNG format
-└── LICENSE                         # SaLR MIT license and upstream notices
+└── LICENSE                         # MIT License
 ```
 
 ## Paper
