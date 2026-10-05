@@ -35,7 +35,7 @@ The action is `refuse`, `partial`, or `allow`; each free-text block is prompted 
 
 ## Installation
 
-Use Python 3.10, preferably the original experiment version **3.10.14**, and a CUDA GPU for training and model evaluation.
+Use Python 3.10, preferably the original experiment version **3.10.14**.
 
 ```bash
 git clone https://github.com/wanglne/SaLR.git
@@ -45,8 +45,6 @@ conda activate salr
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
-
-Install a CUDA build of PyTorch appropriate for your GPU environment. The original experiment versions are PyTorch 2.7.1, Transformers 4.52.4, PEFT 0.15.2, and Datasets 3.6.0. Access to the Meta LLaMA model repositories must be granted to your Hugging Face account; authenticate with `huggingface-cli login` before downloading gated resources.
 
 ## Training data
 
@@ -86,17 +84,6 @@ python scripts/prepare_data.py train \
   --gsm8k data/gsm8k_aug.json \
   --safechain data/safechain_compressed.json \
   --output data/SaLR.json
-```
-
-Each JSON or JSONL training record has this schema:
-
-```json
-{
-  "source": "safechain",
-  "question": "How can I secure my email account?",
-  "cot": "<<account security request>> <<low-risk benign intent>> <<allow>> <<offer defensive security help>>",
-  "answer": "Use a strong password and enable multi-factor authentication."
-}
 ```
 
 Use `source: "gsm8k"` for mathematical examples, with symbolic `<<step>>` chains in `cot` and a numerical `answer`. Training retains the original token-length filtering controlled by `--max_token_num`.
@@ -241,11 +228,3 @@ The badges above point to this section until the public links are available.
 ## Citation
 
 Coming soon.
-
-## Acknowledgements
-
-We thank [CODI](https://github.com/zhenyi4/codi), [SafeChain](https://github.com/uw-nsl/safechain), [HarmBench](https://github.com/centerforaisafety/HarmBench), [XSTest](https://github.com/paul-rottger/exaggerated-safety), and the benchmark/attack authors.
-
-## License
-
-SaLR's original code is licensed under the [MIT License](LICENSE). Retained upstream code excerpts remain under their respective licenses, reproduced in the same license file.
