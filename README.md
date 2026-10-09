@@ -3,8 +3,8 @@
 This is the official repository for **Safety-Aware Latent Space Reasoning in Large Language Models**, accepted at **NeurIPS 2026** 🎉🎉.
 
 ![NeurIPS 2026](https://img.shields.io/badge/NeurIPS-2026-68488B)
-[![arXiv: on hold](https://img.shields.io/badge/arXiv-on%20hold-b31b1b)](#paper)
-[![Proceedings: coming soon](https://img.shields.io/badge/Proceedings-coming%20soon-00629B)](#paper)
+[![Paper: SaLR](https://img.shields.io/badge/Paper-SaLR-b31b1b)](https://wanglne.github.io/papers/SaLR_NIPS2026.pdf)
+[![Proceedings: coming soon](https://img.shields.io/badge/Proceedings-coming%20soon-00629B)](#citation)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ## Overview
@@ -212,14 +212,9 @@ SaLR/
 └── LICENSE                         # MIT License
 ```
 
-## Paper
-
-- **arXiv:** on hold.
-- **NeurIPS 2026 proceedings:** coming soon.
-
-The arXiv and proceedings badges currently link to this section; direct links will be added when available.
-
 ## Citation
+
+If you find SaLR useful for your research, please consider citing the associated [paper](https://wanglne.github.io/papers/SaLR_NIPS2026.pdf):
 
 ```bibtex
 @inproceedings{wang2026safetyaware,
