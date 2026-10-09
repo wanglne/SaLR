@@ -214,7 +214,7 @@ SaLR/
 
 ## Citation
 
-If you find SaLR useful for your research, please consider citing the associated [paper](https://wanglne.github.io/papers/SaLR_NIPS2026.pdf):
+If you find SaLR useful for your research, please consider citing our [paper](https://wanglne.github.io/papers/SaLR_NIPS2026.pdf):
 
 ```bibtex
 @inproceedings{wang2026safetyaware,
