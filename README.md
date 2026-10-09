@@ -221,4 +221,12 @@ The arXiv and proceedings badges currently link to this section; direct links wi
 
 ## Citation
 
-Coming soon.
+```bibtex
+@inproceedings{wang2026safetyaware,
+  title={Safety-Aware Latent Space Reasoning in Large Language Models},
+  author={Yi Wang and Wenjie Wang and Hongye Qiu and Yu Pan},
+  booktitle={The Fortieth Annual Conference on Neural Information Processing Systems},
+  year={2026},
+  url={https://openreview.net/forum?id=v5ExASonPK}
+}
+```
