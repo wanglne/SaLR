@@ -1,6 +1,4 @@
-<h1 align="center">[NeurIPS 2026] SaLR</h1>
-
-<h3 align="center">Safety-Aware Latent Space Reasoning in Large Language Models</h3>
+# [NeurIPS 2026] Safety-Aware Latent Space Reasoning in Large Language Models
 
 <p align="center">
   <a href="https://wanglne.github.io/">Yi Wang</a> ·
